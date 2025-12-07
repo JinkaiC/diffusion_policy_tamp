@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 """
-Convert per-frame .h5 files + external images into a zarr with `data/img/<episode>` and `data/action/<episode>`.
+Convert per-frame .h5 files + external images into diffusion-policy-standard zarr.
 
-This script uses explicit action keys discovered from `testh5.py` output. By default it will
-concatenate `joint_control` and `gripper_control` into a fixed-size action vector, but you can
-specify any comma-separated list of dataset keys present in each .h5 file.
+This script reads ee_states and gripper_control from .h5 files and merges them into a single
+action vector compatible with diffusion-policy training.
+
+Output structure:
+  data/img: observations (T, H, W, 3) float32
+  data/action: actions (T, 8) float32 = [ee_states (7-dim) + gripper_control (1-dim)]
+  meta/episode_ends: episode boundaries
 
 Usage example:
-    python python_scripts/h5_to_zarr_explicit.py --record_dir /path/to/records --out_zarr ./output.zarr \
-    --action_keys joint_control,gripper_control --resize 96 96 --normalize 0-1 --layout array \
-    --time_chunk 161 --overwrite --write_meta --compressor_name zstd --clevel 5
-
-    python python_scripts/h5_to_zarr_explicit.py --record_dir /home/jinkai/diffusion_policy_temp/diffusion_policy_tamp/datasets/records/banana_plate/20251201_154925_530/00000 --out_zarr ./output.zarr \
-    --action_keys joint_control,gripper_control --resize 96 96 --normalize 0-1 --layout array \
-    --time_chunk 161 --overwrite --write_meta --compressor_name zstd --clevel 5
-    episodes: 100%|██████████████████████████████████████████████████████████████████████████| 1/1 [00:04<00:00,  4.96s/it]
-    Wrote zarr to ./output.zarr. Episodes (concatenated): 1, frames total: 387
+    python utils/h5_to_zarr_ee_states.py \
+        --record_dir datasets/records/banana_plate/20251201_154925_530/00000 \
+        --out_zarr outputs/banana_plate_ee_states.zarr \
+        --resize 96 96 --normalize 0-1 --layout array \
+        --time_chunk 161 --overwrite --write_meta --compressor_name zstd --clevel 5
 
 Notes:
 - Prefers external images next to each .h5 (e.g., `0.jpg`, `0.png`, `0_depth.png`, `0_depth_render.jpg`).
-- Skips frames missing images or missing any specified action key (prints a warning(already ignored in line 147)).
+- Skips frames missing images or missing ee_states/gripper_control keys.
+- ee_states and gripper_control are automatically concatenated into a single action array.
 """
 import argparse
 import os
@@ -52,18 +53,6 @@ def get_store(out_zarr, overwrite=False):
     return root
 
 
-def make_compressor():
-    try:
-        comp = zarr.codecs.Blosc(cname='lz4', clevel=5, shuffle=2)
-    except Exception:
-        try:
-            import numcodecs
-            comp = numcodecs.Blosc(cname='lz4', clevel=5, shuffle=2)
-        except Exception:
-            comp = None
-    return comp
-
-
 def collect_h5_files(ep_dir):
     files = [f for f in os.listdir(ep_dir) if f.endswith('.h5')]
     try:
@@ -89,15 +78,30 @@ def read_image_for_frame(fpath):
     return None
 
 
-def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_timestamps=False,
+def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=False,
             resize=None, normalize='0-1', layout='array', time_chunk=161, write_meta=False,
             compressor_name='zstd', clevel=5):
+    """
+    Convert .h5 per-frame data + images into diffusion-policy-standard zarr.
+    
+    Merges ee_states and gripper_control into a single action vector.
+    
+    Args:
+        record_dir: directory containing .h5 files (or subdirectories with timestamps/episodes)
+        out_zarr: output zarr path
+        pattern: unused (kept for consistency)
+        overwrite: whether to overwrite existing zarr
+        no_timestamps: if True, treat record_dir children as episodes directly; else look for timestamp subdirs
+        resize: tuple (W, H) to resize images
+        normalize: '0-1', '-1-1', or 'none' for image normalization
+        layout: 'array' to concatenate episodes, 'group' to keep per-episode groups
+        time_chunk: time dimension chunk size for zarr arrays
+        write_meta: whether to write meta/episode_ends for array layout
+        compressor_name: Blosc compressor name ('zstd', 'lz4', etc.)
+        clevel: compression level
+    """
     root = get_store(out_zarr, overwrite=overwrite)
     data = root.require_group('data')
-    # We'll either write data/img and data/action as arrays (layout='array')
-    # or as groups with per-episode datasets (layout='group').
-    img_group = data.require_group('img')
-    action_group = data.require_group('action')
 
     if not no_timestamps:
         # collect episode dirs under timestamps
@@ -115,7 +119,7 @@ def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_
         if any(f.endswith('.h5') for f in os.listdir(record_dir)):
             episode_dirs = [record_dir]
 
-    # build compressor based on requested codec
+    # build compressor
     try:
         comp = zarr.codecs.Blosc(cname=compressor_name, clevel=clevel, shuffle=2)
     except Exception:
@@ -128,19 +132,20 @@ def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_
     compressor = comp
 
     all_imgs = []
-    all_acts = []
+    all_actions = []  # merged ee_states + gripper_control
     episode_ends = []
 
     for ep_dir in tqdm(episode_dirs, desc='episodes'):
         h5_files = collect_h5_files(ep_dir)
         imgs = []
-        acts = []
+        actions_list = []
+        
         for fpath in h5_files:
             img = read_image_for_frame(fpath)
+            
             with h5py.File(fpath, 'r') as hf:
                 # if no external image, try common image keys inside h5
                 if img is None:
-                    # look for dataset keys likely to be image
                     for k in ['img', 'rgb', 'image']:
                         if k in hf:
                             try:
@@ -159,7 +164,6 @@ def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_
                 # resize if requested
                 if resize is not None:
                     w, h = resize
-                    # cv2.resize expects (width,height) as (cols,rows) order via (W,H)
                     img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
                 # normalize / dtype
                 if normalize == '0-1':
@@ -174,23 +178,26 @@ def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_
                         else:
                             img = img.astype(np.uint8)
 
-                # collect action pieces
-                pieces = []
-                missing_key = False
-                for k in action_keys:
-                    if k not in hf:
-                        missing_key = True
-                        break
-                    arr = np.asarray(hf[k][()])
-                    arr = arr.reshape(-1)
-                    pieces.append(arr)
-                if missing_key:
-                    print(f"Warning: skipping {fpath} (missing action key among {action_keys})")
+                # read ee_states
+                if 'ee_states' not in hf:
+                    print(f"Warning: skipping {fpath} (missing ee_states)")
                     continue
+                ee_states = np.asarray(hf['ee_states'][()])
+                ee_states = ee_states.reshape(-1)
 
-                action_vec = np.concatenate(pieces, axis=0)
+                # read gripper_control
+                if 'gripper_control' not in hf:
+                    print(f"Warning: skipping {fpath} (missing gripper_control)")
+                    continue
+                gripper_control = np.asarray(hf['gripper_control'][()])
+                gripper_control = gripper_control.reshape(-1)
+
+                # merge ee_states and gripper_control into single action vector
+                action = np.concatenate([ee_states, gripper_control], axis=0)
+
+                # success: append all
                 imgs.append(img)
-                acts.append(action_vec)
+                actions_list.append(action)
 
         if len(imgs) == 0:
             print(f"No usable frames in episode {ep_dir}; skipping")
@@ -199,53 +206,52 @@ def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_
         imgs_np = np.stack(imgs, axis=0)
 
         # ensure all action vectors in this episode have the same length by padding
-        max_len_ep = max(a.shape[0] for a in acts)
-        acts_padded = [np.pad(a, (0, max_len_ep - a.shape[0]), mode='constant', constant_values=0) for a in acts]
-        acts_np = np.stack(acts_padded, axis=0)
+        max_len_action = max(a.shape[0] for a in actions_list)
+        actions_padded = [np.pad(a, (0, max_len_action - a.shape[0]), mode='constant', constant_values=0) for a in actions_list]
+        actions_np = np.stack(actions_padded, axis=0)
 
         if layout == 'array':
             # accumulate across episodes
             start = len(all_imgs)
             all_imgs.append(imgs_np)
-            all_acts.append(acts_np)
+            all_actions.append(actions_np)
             episode_ends.append(start + imgs_np.shape[0])
         else:
             # per-episode group dataset
             ep_name = os.path.basename(os.path.normpath(ep_dir))
-            if ep_name in img_group:
-                del img_group[ep_name]
-            if ep_name in action_group:
-                del action_group[ep_name]
+            if ep_name in data:
+                try:
+                    del data[ep_name]
+                except Exception:
+                    pass
 
-            img_ds = img_group.create_dataset(ep_name, shape=imgs_np.shape, dtype=imgs_np.dtype,
-                                              chunks=(1,)+imgs_np.shape[1:], compressor=compressor)
+            # create separate groups for per-episode layout
+            ep_group = data.require_group(ep_name)
+            
+            img_ds = ep_group.create_dataset('img', shape=imgs_np.shape, dtype=imgs_np.dtype,
+                                            chunks=(1,)+imgs_np.shape[1:], compressor=compressor)
             img_ds[:] = imgs_np
-            if acts_np.ndim == 1:
-                acts_np = acts_np.reshape((-1, 1))
-            action_ds = action_group.create_dataset(ep_name, shape=acts_np.shape, dtype=acts_np.dtype,
-                                                    chunks=(min(time_chunk, acts_np.shape[0]),)+acts_np.shape[1:], compressor=compressor)
-            action_ds[:] = acts_np
+            
+            action_ds = ep_group.create_dataset('action', shape=actions_np.shape, dtype=np.float32,
+                                               chunks=(min(time_chunk, actions_np.shape[0]), actions_np.shape[1]), compressor=compressor)
+            action_ds[:] = actions_np.astype(np.float32)
 
     # if array layout requested, concatenate and write as single arrays
     if layout == 'array' and len(all_imgs) > 0:
         imgs_cat = np.concatenate(all_imgs, axis=0)
 
         # ensure all episode-level action arrays have the same second-dimension
-        max_len_global = max(arr.shape[1] for arr in all_acts)
-        all_acts_padded = [np.pad(arr, ((0,0),(0,max_len_global - arr.shape[1])), mode='constant', constant_values=0) for arr in all_acts]
-        acts_cat = np.concatenate(all_acts_padded, axis=0)
+        max_len_action_global = max(arr.shape[1] for arr in all_actions)
+        all_actions_padded = [np.pad(arr, ((0,0),(0,max_len_action_global - arr.shape[1])), mode='constant', constant_values=0) for arr in all_actions]
+        actions_cat = np.concatenate(all_actions_padded, axis=0)
 
         # remove existing top-level arrays if overwriting
-        if 'img' in data:
-            try:
-                del data['img']
-            except Exception:
-                pass
-        if 'action' in data:
-            try:
-                del data['action']
-            except Exception:
-                pass
+        for key in ['img', 'action']:
+            if key in data:
+                try:
+                    del data[key]
+                except Exception:
+                    pass
 
         # compute chunks
         t = imgs_cat.shape[0]
@@ -258,47 +264,45 @@ def convert(record_dir, out_zarr, action_keys, pattern='*', overwrite=False, no_
                                      chunks=(time_chunk_val, h, w, c), compressor=compressor)
         img_ds[:] = imgs_cat
 
-        if acts_cat.ndim == 1:
-            acts_cat = acts_cat.reshape((-1, 1))
-        action_ds = data.create_dataset('action', shape=acts_cat.shape, dtype=acts_cat.dtype,
-                                        chunks=(time_chunk_val, acts_cat.shape[1]), compressor=compressor)
-        action_ds[:] = acts_cat
+        action_ds = data.create_dataset('action', shape=actions_cat.shape, dtype=np.float32,
+                                        chunks=(time_chunk_val, actions_cat.shape[1]), compressor=compressor)
+        action_ds[:] = actions_cat.astype(np.float32)
 
         # write meta/episode_ends if requested
         if write_meta:
             meta = root.require_group('meta')
-            # episode_ends as cumulative lengths
             ep_ends_arr = np.array(episode_ends, dtype=np.int64)
             if 'episode_ends' in meta:
                 del meta['episode_ends']
-            meta.create_dataset('episode_ends', data=ep_ends_arr)
+            ds = meta.create_dataset('episode_ends', shape=ep_ends_arr.shape, dtype=ep_ends_arr.dtype)
+            ds[:] = ep_ends_arr
 
         print(f'Wrote zarr to {out_zarr}. Episodes (concatenated): {len(episode_ends)}, frames total: {t}')
+        print(f'  data/img shape: {imgs_cat.shape}, dtype: {imgs_cat.dtype}')
+        print(f'  data/action shape: {actions_cat.shape}, dtype: float32')
+        print(f'    └─ [ee_states (7-dim) + gripper_control (1-dim)]')
     else:
         print(f'Wrote zarr to {out_zarr}. Episodes (per-episode group count): {len(episode_dirs)}')
 
 
 def main():
-        parser = argparse.ArgumentParser()
-        parser.add_argument('--record_dir', required=True)
-        parser.add_argument('--out_zarr', required=True)
-        parser.add_argument('--action_keys', default='joint_control,gripper_control',
-                help='comma-separated action dataset keys to concatenate (default: joint_control,gripper_control)')
-        parser.add_argument('--pattern', default='*', help='glob pattern for image files (unused for explicit reader)')
-        parser.add_argument('--overwrite', action='store_true')
-        parser.add_argument('--no_timestamps', action='store_true', help='do not treat record_dir children as timestamps')
-        parser.add_argument('--resize', nargs=2, type=int, default=None, help='resize to W H (e.g. --resize 96 96)')
-        parser.add_argument('--normalize', choices=['0-1','-1-1','none'], default='0-1', help='normalize image values')
-        parser.add_argument('--layout', choices=['array','group'], default='array', help='write layout: array (concatenate) or group (per-episode)')
-        parser.add_argument('--time_chunk', type=int, default=161, help='time chunk size for zarr arrays')
-        parser.add_argument('--write_meta', action='store_true', help='write meta/episode_ends when using array layout')
-        parser.add_argument('--compressor_name', default='zstd', help='Blosc compressor name (zstd or lz4)')
-        parser.add_argument('--clevel', type=int, default=5, help='Blosc compression level')
-        args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--record_dir', required=True, help='root directory with per-frame .h5 files')
+    parser.add_argument('--out_zarr', required=True, help='output zarr path')
+    parser.add_argument('--pattern', default='*', help='glob pattern for image files (unused)')
+    parser.add_argument('--overwrite', action='store_true', help='overwrite existing zarr')
+    parser.add_argument('--no_timestamps', action='store_true', help='do not treat record_dir children as timestamps')
+    parser.add_argument('--resize', nargs=2, type=int, default=None, help='resize to W H (e.g. --resize 96 96)')
+    parser.add_argument('--normalize', choices=['0-1','-1-1','none'], default='0-1', help='normalize image values')
+    parser.add_argument('--layout', choices=['array','group'], default='array', help='write layout: array (concatenate) or group (per-episode)')
+    parser.add_argument('--time_chunk', type=int, default=161, help='time chunk size for zarr arrays')
+    parser.add_argument('--write_meta', action='store_true', help='write meta/episode_ends when using array layout')
+    parser.add_argument('--compressor_name', default='zstd', help='Blosc compressor name (zstd or lz4)')
+    parser.add_argument('--clevel', type=int, default=5, help='Blosc compression level')
+    args = parser.parse_args()
 
-        action_keys = [k.strip() for k in args.action_keys.split(',') if k.strip()]
-        resize = tuple(args.resize) if args.resize is not None else None
-        convert(args.record_dir, args.out_zarr, action_keys=action_keys, pattern=args.pattern,
+    resize = tuple(args.resize) if args.resize is not None else None
+    convert(args.record_dir, args.out_zarr, pattern=args.pattern,
             overwrite=args.overwrite, no_timestamps=args.no_timestamps,
             resize=resize, normalize=args.normalize, layout=args.layout,
             time_chunk=args.time_chunk, write_meta=args.write_meta,
