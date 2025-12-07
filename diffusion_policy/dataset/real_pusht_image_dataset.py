@@ -42,62 +42,7 @@ class RealPushTImageDataset(BaseImageDataset):
         ):
         assert os.path.isdir(dataset_path)
         
-        replay_buffer = None
-        if use_cache:
-            # fingerprint shape_meta
-            shape_meta_json = json.dumps(OmegaConf.to_container(shape_meta), sort_keys=True)
-            shape_meta_hash = hashlib.md5(shape_meta_json.encode('utf-8')).hexdigest()
-            cache_zarr_path = os.path.join(dataset_path, shape_meta_hash + '.zarr.zip')
-            cache_lock_path = cache_zarr_path + '.lock'
-            print('Acquiring lock on cache.')
-            with FileLock(cache_lock_path):
-                if not os.path.exists(cache_zarr_path):
-                    # cache does not exists
-                    try:
-                        print('Cache does not exist. Creating!')
-                        replay_buffer = _get_replay_buffer(
-                            dataset_path=dataset_path,
-                            shape_meta=shape_meta,
-                            store=zarr.MemoryStore()
-                        )
-                        print('Saving cache to disk.')
-                        with zarr.ZipStore(cache_zarr_path) as zip_store:
-                            replay_buffer.save_to_store(
-                                store=zip_store
-                            )
-                    except Exception as e:
-                        shutil.rmtree(cache_zarr_path)
-                        raise e
-                else:
-                    print('Loading cached ReplayBuffer from Disk.')
-                    with zarr.ZipStore(cache_zarr_path, mode='r') as zip_store:
-                        replay_buffer = ReplayBuffer.copy_from_store(
-                            src_store=zip_store, store=zarr.MemoryStore())
-                    print('Loaded!')
-        else:
-            replay_buffer = _get_replay_buffer(
-                dataset_path=dataset_path,
-                shape_meta=shape_meta,
-                store=zarr.MemoryStore()
-            )
-        
-        if delta_action:
-            # replace action as relative to previous frame
-            actions = replay_buffer['action'][:]
-            # support positions only at this time
-            assert actions.shape[1] <= 3
-            actions_diff = np.zeros_like(actions)
-            episode_ends = replay_buffer.episode_ends[:]
-            for i in range(len(episode_ends)):
-                start = 0
-                if i > 0:
-                    start = episode_ends[i-1]
-                end = episode_ends[i]
-                # delta action is the difference between previous desired position and the current
-                # it should be scheduled at the previous timestep for the current timestep
-                # to ensure consistency with positional mode
-                actions_diff[start+1:end] = np.diff(actions[start:end], axis=0)
-            replay_buffer['action'][:] = actions_diff
+        replay_buffer = ReplayBuffer.copy_from_path(dataset_path)
 
         rgb_keys = list()
         lowdim_keys = list()
@@ -167,7 +112,7 @@ class RealPushTImageDataset(BaseImageDataset):
         # obs
         for key in self.lowdim_keys:
             normalizer[key] = SingleFieldLinearNormalizer.create_fit(
-                self.replay_buffer[key])
+                self.replay_buffer['state'])
         
         # image
         for key in self.rgb_keys:
@@ -191,6 +136,7 @@ class RealPushTImageDataset(BaseImageDataset):
         T_slice = slice(self.n_obs_steps)
 
         obs_dict = dict()
+        
         for key in self.rgb_keys:
             # move channel last to channel first
             # T,H,W,C
@@ -199,7 +145,8 @@ class RealPushTImageDataset(BaseImageDataset):
                 ).astype(np.float32) / 255.
             # T,C,H,W
             # save ram
-            del data[key]
+            # del data[key]
+            
         for key in self.lowdim_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)
             # save ram
@@ -217,75 +164,46 @@ class RealPushTImageDataset(BaseImageDataset):
         }
         return torch_data
 
-def zarr_resize_index_last_dim(zarr_arr, idxs):
-    actions = zarr_arr[:]
-    actions = actions[...,idxs]
-    zarr_arr.resize(zarr_arr.shape[:-1] + (len(idxs),))
-    zarr_arr[:] = actions
-    return zarr_arr
-
-def _get_replay_buffer(dataset_path, shape_meta, store):
-    # parse shape meta
-    rgb_keys = list()
-    lowdim_keys = list()
-    out_resolutions = dict()
-    lowdim_shapes = dict()
-    obs_shape_meta = shape_meta['obs']
-    for key, attr in obs_shape_meta.items():
-        type = attr.get('type', 'low_dim')
-        shape = tuple(attr.get('shape'))
-        if type == 'rgb':
-            rgb_keys.append(key)
-            c,h,w = shape
-            out_resolutions[key] = (w,h)
-        elif type == 'low_dim':
-            lowdim_keys.append(key)
-            lowdim_shapes[key] = tuple(shape)
-            if 'pose' in key:
-                assert tuple(shape) in [(2,),(6,)]
-    
-    action_shape = tuple(shape_meta['action']['shape'])
-    assert action_shape in [(2,),(6,)]
-
-    # load data
-    cv2.setNumThreads(1)
-    with threadpool_limits(1):
-        replay_buffer = real_data_to_replay_buffer(
-            dataset_path=dataset_path,
-            out_store=store,
-            out_resolutions=out_resolutions,
-            lowdim_keys=lowdim_keys + ['action'],
-            image_keys=rgb_keys
-        )
-
-    # transform lowdim dimensions
-    if action_shape == (2,):
-        # 2D action space, only controls X and Y
-        zarr_arr = replay_buffer['action']
-        zarr_resize_index_last_dim(zarr_arr, idxs=[0,1])
-    
-    for key, shape in lowdim_shapes.items():
-        if 'pose' in key and shape == (2,):
-            # only take X and Y
-            zarr_arr = replay_buffer[key]
-            zarr_resize_index_last_dim(zarr_arr, idxs=[0,1])
-
-    return replay_buffer
-
 
 def test():
     import hydra
     from omegaconf import OmegaConf
     OmegaConf.register_new_resolver("eval", eval, replace=True)
 
-    with hydra.initialize('../diffusion_policy/config'):
-        cfg = hydra.compose('train_robomimic_real_image_workspace')
+    with hydra.initialize(config_path='../../diffusion_policy/config'):
+        cfg = hydra.compose(config_name='train_diffusion_unet_real_image_workspace')
+        print(f"Dataset path: {cfg.task.dataset_path}")
         OmegaConf.resolve(cfg)
         dataset = hydra.utils.instantiate(cfg.task.dataset)
 
-    from matplotlib import pyplot as plt
-    normalizer = dataset.get_normalizer()
-    nactions = normalizer['action'].normalize(dataset.replay_buffer['action'][:])
-    diff = np.diff(nactions, axis=0)
-    dists = np.linalg.norm(np.diff(nactions, axis=0), axis=-1)
-    _ = plt.hist(dists, bins=100); plt.title('real action velocity')
+
+    # Create a dataloader to check get_item functionality
+    from torch.utils.data import DataLoader
+    
+    # Initialize dataloader with batch size of 2
+    batch_size = 2
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=True
+    )
+    
+    # Get a sample batch
+    print(f"Dataset length: {len(dataset)}")
+    print(f"Getting a sample batch from dataloader...")
+    sample_batch = next(iter(dataloader))
+    
+    # Print batch structure
+    print("\nBatch structure:")
+    for key, value in sample_batch.items():
+        if isinstance(value, dict):
+            print(f"{key}:")
+            for sub_key, sub_value in value.items():
+                print(f"  {sub_key}: {type(sub_value)}, shape: {sub_value.shape}")
+        else:
+            print(f"{key}: {type(value)}, shape: {value.shape}")
+
+if __name__ == "__main__":
+    test()

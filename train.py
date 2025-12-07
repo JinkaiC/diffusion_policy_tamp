@@ -23,9 +23,13 @@ OmegaConf.register_new_resolver("eval", eval, replace=True)
         'diffusion_policy','config'))
 )
 def main(cfg: OmegaConf):
+    config_path = str(pathlib.Path(__file__).parent.joinpath('diffusion_policy','config'))
+    print(f"Config path: {config_path}")
+# def main(cfg: OmegaConf):
     # resolve immediately so all the ${now:} resolvers
     # will use the same time.
     OmegaConf.resolve(cfg)
+    print(f"Config: {cfg}")
 
     cls = hydra.utils.get_class(cfg._target_)
     workspace: BaseWorkspace = cls(cfg)

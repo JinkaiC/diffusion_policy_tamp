@@ -1,0 +1,32 @@
+import numpy as np
+
+TO_TENSOR_KEYS = [
+    "input_coords_list",
+    "input_feats_list",
+    "action",
+    "action_normalized",
+]
+
+INTRINSICS_MATRIX = {
+    "fx": 912.9197998047,
+    "fy": 912.5616455078,
+    "cx": 641.3217163086,
+    "cy": 375.3132324219
+}
+
+EXTRINSIC_MATRIX = np.array(
+    [
+        [6.435498174802189997e-02,9.977364656067221338e-01,1.950337208836816494e-02,1.546131844829775216e-03],
+        [2.481423629789324403e-01,2.930726460038224346e-03,-9.687191432699405746e-01,-7.047047607022306759e-02],
+        [-9.665835732203619246e-01,6.718151562016150269e-02,-2.473920773580562948e-01,1.329791247196420167e+00],
+        [0.000000000000000000e+00,0.000000000000000000e+00,0.000000000000000000e+00,1.000000000000000000e+00],
+    ]
+)
+
+# imagenet statistics for image normalization
+IMG_MEAN = np.array([0.485, 0.456, 0.406])
+IMG_STD = np.array([0.229, 0.224, 0.225])
+
+# workspace in base coordinate
+BASE_WORKSPACE_MIN = np.array([0.2, -0.4, 0.031])
+BASE_WORKSPACE_MAX = np.array([0.9, 0.4, 1.5])

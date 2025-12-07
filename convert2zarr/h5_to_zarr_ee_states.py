@@ -7,6 +7,7 @@ action vector compatible with diffusion-policy training.
 
 Output structure:
   data/img: observations (T, H, W, 3) float32
+  data/state: states (T, 7) float32 = [ee_states (7-dim)]
   data/action: actions (T, 8) float32 = [ee_states (7-dim) + gripper_control (1-dim)]
   meta/episode_ends: episode boundaries
 
@@ -132,12 +133,14 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
     compressor = comp
 
     all_imgs = []
+    all_states = []  # ee_states only
     all_actions = []  # merged ee_states + gripper_control
     episode_ends = []
 
     for ep_dir in tqdm(episode_dirs, desc='episodes'):
         h5_files = collect_h5_files(ep_dir)
         imgs = []
+        states_list = []
         actions_list = []
         
         for fpath in h5_files:
@@ -197,6 +200,7 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
 
                 # success: append all
                 imgs.append(img)
+                states_list.append(ee_states)
                 actions_list.append(action)
 
         if len(imgs) == 0:
@@ -204,6 +208,11 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
             continue
 
         imgs_np = np.stack(imgs, axis=0)
+
+        # ensure all state vectors in this episode have the same length by padding
+        max_len_state = max(s.shape[0] for s in states_list)
+        states_padded = [np.pad(s, (0, max_len_state - s.shape[0]), mode='constant', constant_values=0) for s in states_list]
+        states_np = np.stack(states_padded, axis=0)
 
         # ensure all action vectors in this episode have the same length by padding
         max_len_action = max(a.shape[0] for a in actions_list)
@@ -214,6 +223,7 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
             # accumulate across episodes
             start = len(all_imgs)
             all_imgs.append(imgs_np)
+            all_states.append(states_np)
             all_actions.append(actions_np)
             episode_ends.append(start + imgs_np.shape[0])
         else:
@@ -232,6 +242,10 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
                                             chunks=(1,)+imgs_np.shape[1:], compressor=compressor)
             img_ds[:] = imgs_np
             
+            state_ds = ep_group.create_dataset('state', shape=states_np.shape, dtype=np.float32,
+                                               chunks=(min(time_chunk, states_np.shape[0]), states_np.shape[1]), compressor=compressor)
+            state_ds[:] = states_np.astype(np.float32)
+            
             action_ds = ep_group.create_dataset('action', shape=actions_np.shape, dtype=np.float32,
                                                chunks=(min(time_chunk, actions_np.shape[0]), actions_np.shape[1]), compressor=compressor)
             action_ds[:] = actions_np.astype(np.float32)
@@ -240,13 +254,18 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
     if layout == 'array' and len(all_imgs) > 0:
         imgs_cat = np.concatenate(all_imgs, axis=0)
 
+        # ensure all episode-level state arrays have the same second-dimension
+        max_len_state_global = max(arr.shape[1] for arr in all_states)
+        all_states_padded = [np.pad(arr, ((0,0),(0,max_len_state_global - arr.shape[1])), mode='constant', constant_values=0) for arr in all_states]
+        states_cat = np.concatenate(all_states_padded, axis=0)
+
         # ensure all episode-level action arrays have the same second-dimension
         max_len_action_global = max(arr.shape[1] for arr in all_actions)
         all_actions_padded = [np.pad(arr, ((0,0),(0,max_len_action_global - arr.shape[1])), mode='constant', constant_values=0) for arr in all_actions]
         actions_cat = np.concatenate(all_actions_padded, axis=0)
 
         # remove existing top-level arrays if overwriting
-        for key in ['img', 'action']:
+        for key in ['img', 'state', 'action']:
             if key in data:
                 try:
                     del data[key]
@@ -264,6 +283,10 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
                                      chunks=(time_chunk_val, h, w, c), compressor=compressor)
         img_ds[:] = imgs_cat
 
+        state_ds = data.create_dataset('state', shape=states_cat.shape, dtype=np.float32,
+                                       chunks=(time_chunk_val, states_cat.shape[1]), compressor=compressor)
+        state_ds[:] = states_cat.astype(np.float32)
+
         action_ds = data.create_dataset('action', shape=actions_cat.shape, dtype=np.float32,
                                         chunks=(time_chunk_val, actions_cat.shape[1]), compressor=compressor)
         action_ds[:] = actions_cat.astype(np.float32)
@@ -279,6 +302,8 @@ def convert(record_dir, out_zarr, pattern='*', overwrite=False, no_timestamps=Fa
 
         print(f'Wrote zarr to {out_zarr}. Episodes (concatenated): {len(episode_ends)}, frames total: {t}')
         print(f'  data/img shape: {imgs_cat.shape}, dtype: {imgs_cat.dtype}')
+        print(f'  data/state shape: {states_cat.shape}, dtype: float32')
+        print(f'    └─ [ee_states (7-dim)]')
         print(f'  data/action shape: {actions_cat.shape}, dtype: float32')
         print(f'    └─ [ee_states (7-dim) + gripper_control (1-dim)]')
     else:
