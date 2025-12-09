@@ -55,4 +55,4 @@ if [[ "$sim" != "-s" ]]; then
     source catkin_ws/devel/setup.bash
     cd ../..
 fi
-python eval_real_robot_continue.py -i $data_dir $gripper $sim
+python eval_real_robot_continue.py -i $data_dir $gripper
