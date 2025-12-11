@@ -75,6 +75,9 @@ def run_single_episode(agent, policy, cfg, device, max_duration, gripper, output
         cprint(f"kill faild: {e}", "red")
     obs_res = get_real_obs_resolution(cfg.task.shape_meta)
     print("Warming up policy inference")
+    
+    # Reset agent buffers at the start of each episode
+    agent.reset_buffer()
     obs = agent.get_observation()
     with torch.no_grad():
         policy.reset()
@@ -162,7 +165,7 @@ def run_single_episode(agent, policy, cfg, device, max_duration, gripper, output
 @click.option('--vis_camera_idx', default=0, type=int, help="Which RealSense camera to visualize.")
 @click.option('--steps_per_inference', '-si', default=6, type=int, help="Action horizon for inference.")
 @click.option('--max_duration', '-md', default=1000, help='Max duration in steps.')
-@click.option('--frequency', '-f', default=5, type=float, help="Control frequency in Hz.")
+@click.option('--frequency', '-f', default=10, type=float, help="Control frequency in Hz.")
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
 @click.option('--gripper', '-g', is_flag=True, default=False, type=bool, help='Enable gripper control')
 @click.option('--continuous', '-c', is_flag=True, default=True, type=bool, help='Enable continuous testing mode')

@@ -58,6 +58,12 @@ class Agent:
         """Pre-fill buffer with obs_num frames"""
         for _ in range(self.obs_num):
             self._add_single_observation()
+    
+    def reset_buffer(self):
+        """Reset observation buffers and refill with current observations"""
+        self.rgb_buffer.clear()
+        self.pose_buffer.clear()
+        self._fill_initial_buffer()
 
     def _add_single_observation(self):
         """Capture and process one frame+pose"""

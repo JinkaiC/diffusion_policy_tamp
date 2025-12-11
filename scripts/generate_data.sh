@@ -6,7 +6,7 @@ sim=False
 max_demo_num=200
 ir=False
 old_rgb_crop=""
-mod=5
+mod=10
 
 # Parse parameters
 while [[ $# -gt 0 ]]; do

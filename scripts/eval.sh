@@ -25,7 +25,6 @@ export CUDA_VISIBLE_DEVICES=$selected_gpu
 echo "Selected GPU $selected_gpu with $min_memory MB memory used."
 
 gripper=""
-sim=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -37,10 +36,6 @@ while [[ $# -gt 0 ]]; do
             gripper="-g"
             shift 1
             ;;
-        --sim | -s)
-            sim="-s"
-            shift 1
-            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -50,9 +45,4 @@ done
 
 unset ROS_DISTRO
 source /opt/ros/noetic/local_setup.bash
-if [[ "$sim" != "-s" ]]; then
-    cd dependencies/frankapy
-    source catkin_ws/devel/setup.bash
-    cd ../..
-fi
 python eval_real_robot_continue.py -i $data_dir $gripper
