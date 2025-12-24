@@ -63,7 +63,7 @@ def _keyboard_signal_handler(key):
 keyboard_listener = keyboard.Listener(on_press=_keyboard_signal_handler)
 keyboard_listener.start()
 
-def run_single_episode(agent, policy, cfg, device, max_duration, gripper, output):
+def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper, output):
     """Single episode running"""
     global interrupted
     global keyboard_listener
