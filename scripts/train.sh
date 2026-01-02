@@ -34,6 +34,10 @@ while [[ $# -gt 0 ]]; do
             task="$2"
             shift 2
             ;;
+        --dim | -d)
+            dim="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -42,8 +46,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # training stacking task
-python train.py \
-    --config-name=train_diffusion_unet_real_image_workspace \
-    task=$task \
-    task.dataset_path=$data_dir
+cmd="python train.py --config-name=train_diffusion_unet_real_image_workspace task=$task task.dataset_path=$data_dir"
+
+if [ ! -z "$dim" ]; then
+    cmd="$cmd task.low_dim_size=$dim"
+fi
+
+$cmd
 

@@ -171,10 +171,10 @@ class FrankaGenesisEnvWrapper:
     #     ik_res = np.array(ik_res[-1])
     #     return ik_res
 
-    # def move_joint(self, target_joint): #! double check the type of target_joint
-    #     if target_joint is not None:
-    #         joint_pos_msg = Float64MultiArray(data=target_joint)
-    #         self.joint_control_pub.publish(joint_pos_msg)
+    def move_joint(self, target_joint): #! double check the type of target_joint
+        if target_joint is not None:
+            joint_pos_msg = Float64MultiArray(data=target_joint)
+            self.joint_control_pub.publish(joint_pos_msg)
             
     # def move_joint_ik(self, target_ee: list):
     #     """

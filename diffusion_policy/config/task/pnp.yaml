@@ -2,6 +2,7 @@ name: real_image
 
 image_shape: [3, 224, 224]
 dataset_path: /home/jinzhou/nvme2/test_twin-all50_dp_gripper/train
+low_dim_size: 10
 
 shape_meta: &shape_meta
   # acceptable types: rgb, low_dim
@@ -10,10 +11,12 @@ shape_meta: &shape_meta
       shape: ${task.image_shape}
       type: rgb
     state:
-      shape: [10]
+      shape:
+        - ${task.low_dim_size}
       type: low_dim
   action: 
-    shape: [10]
+    shape:
+      - ${task.low_dim_size}
 
 env_runner:
   _target_: diffusion_policy.env_runner.real_pusht_image_runner.RealPushTImageRunner

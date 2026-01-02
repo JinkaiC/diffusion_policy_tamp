@@ -103,6 +103,8 @@ def extract_demo_data(step_path: str, gripper: bool, sim: bool) -> Tuple:
                     gripper_joint_positions = float(f.get("gripper_control", None)[0])
                 else:
                     gripper_joint_positions = None
+                arm_joint_pose = np.array(f.get("joint_states", None))[:10]
+                arm_joint_control = np.array(f.get("joint_control", None))[:10]
                 timestamp = f.get("timestamp", [int(os.path.basename(step_path).split('.h5')[0])])[0]
             img_path = step_path.replace(".h5", ".jpg")
             if not os.path.exists(img_path):
@@ -114,6 +116,8 @@ def extract_demo_data(step_path: str, gripper: bool, sim: bool) -> Tuple:
                 rgb_image,
                 timestamp,
                 gripper_joint_positions,
+                arm_joint_pose,
+                arm_joint_control
             )
             
     except KeyError as e:
@@ -135,6 +139,7 @@ def process_demo_step(
     sim: bool = False,
     ignore_rotation: bool = False,
     old_rgb_crop: str = "",
+    use_all_joints: bool = False,
 ) -> Tuple:
     """Process a single step of demonstration data."""
     try:
@@ -145,6 +150,8 @@ def process_demo_step(
             color_image,
             time,
             gripper_joint_positions,
+            arm_joint_pose,
+            arm_joint_control,
         ) = extract_demo_data(step_path, gripper, sim=sim,)
             
         # Transform poses to the specified frame
@@ -157,7 +164,8 @@ def process_demo_step(
             state = xyz
         else:
             state = np.concatenate([xyz, rot6d])
-        
+        if use_all_joints:
+            state = np.array(arm_joint_pose)
         # Transform poses to the specified frame
         # 7-dim: x, y, z, qw, qx, qy, qz
         transformed_controled_ee_pose = transform_ee_pose_frame(arm_ee_control, frame)
@@ -168,7 +176,8 @@ def process_demo_step(
             action = action_xyz
         else:
             action = np.concatenate([action_xyz, action_rot6d])
-        
+        if use_all_joints:
+            action = np.array(arm_joint_control)
         # 10-dim: x, y, z, rot6d, gripper
         if gripper:
             # no gripper state here
@@ -290,6 +299,7 @@ def convert_to_zarr(
     mod: int = 5,
     ignore_rotation: bool = False,
     old_rgb_crop: bool = False,
+    use_all_joints: bool = False,
 ) -> None:
     """Convert demonstration data to zarr format"""
     # Initialize data containers
@@ -330,6 +340,7 @@ def convert_to_zarr(
                     sim=sim,
                     ignore_rotation=ignore_rotation,
                     old_rgb_crop=old_rgb_crop,
+                    use_all_joints=use_all_joints,
                 )
 
                 # Debug visualization if enabled
@@ -476,6 +487,9 @@ def print_dataset_summary(data_containers: Dict[str, List]) -> None:
 @click.option(
     "--old_rgb_crop", type=str, default="",
 )
+@click.option(
+    "--use_all_joints", type=bool, default=False,
+)
 def main(
     data_dir: str,
     output_dir: str,
@@ -490,6 +504,7 @@ def main(
     max_demo_num: int,
     ignore_rotation: bool,
     old_rgb_crop: str,
+    use_all_joints: bool,
 ):
     
         
@@ -543,6 +558,7 @@ def main(
             mod,
             ignore_rotation,
             old_rgb_crop,
+            use_all_joints
         )
 
         # Process validation data if needed
@@ -559,6 +575,7 @@ def main(
                 mod,
                 ignore_rotation,
                 old_rgb_crop,
+                use_all_joints
             )
 
         cprint("Dataset conversion completed successfully!", "green")

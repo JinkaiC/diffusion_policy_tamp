@@ -47,20 +47,18 @@ while [[ $# -gt 0 ]]; do
             old_rgb_crop="--old_rgb_crop $2"
             shift 2
             ;;
+        --use_all_joints)
+            use_all_joints=True
+            shift 1
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
             ;;
     esac
 done
-
-python convert_zarr.py \
-    --data_dir $data_dir \
-    --gripper $gripper \
-    --debug $debug \
-    --nots $nots \
-    --sim $sim \
-    --max_demo_num $max_demo_num \
-    --mod $mod \
-    --ignore_rotation $ir \
-    $old_rgb_crop
+cmd="python convert_zarr.py --data_dir $data_dir --gripper $gripper --debug $debug --nots $nots --sim $sim --max_demo_num $max_demo_num --mod $mod --ignore_rotation $ir  $old_rgb_crop"
+if [ "$use_all_joints" = True ] ; then
+    cmd="$cmd --use_all_joints True"
+fi
+eval $cmd
