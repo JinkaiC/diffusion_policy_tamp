@@ -25,7 +25,8 @@ export CUDA_VISIBLE_DEVICES=$selected_gpu
 echo "Selected GPU $selected_gpu with $min_memory MB memory used."
 
 gripper=""
-
+use_all_joints=False
+dim=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --input | -i)
@@ -36,6 +37,14 @@ while [[ $# -gt 0 ]]; do
             gripper="-g"
             shift 1
             ;;
+        --use_all_joints)
+            use_all_joints=True
+            shift 1
+            ;;
+        --dim | -d)
+            dim="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -45,4 +54,11 @@ done
 
 unset ROS_DISTRO
 source /opt/ros/noetic/local_setup.bash
-python eval_real_robot_continue.py -i $data_dir $gripper
+cmd="python eval_real_robot_continue.py -i $data_dir $gripper"
+if [ "$use_all_joints" = True ] ; then
+    cmd="$cmd --use_all_joints True"
+fi
+if [ ! -z "$dim" ]; then
+    cmd="$cmd --dim $dim"
+fi
+eval $cmd

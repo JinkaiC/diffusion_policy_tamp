@@ -63,7 +63,7 @@ def _keyboard_signal_handler(key):
 keyboard_listener = keyboard.Listener(on_press=_keyboard_signal_handler)
 keyboard_listener.start()
 
-def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper, output):
+def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper, output, use_all_joints=False):
     """Single episode running"""
     global interrupted
     global keyboard_listener
@@ -87,11 +87,11 @@ def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper,
             lambda x: torch.from_numpy(x).unsqueeze(0).to(device))
         result = policy.predict_action(obs_dict)
         action = result['action'][0].detach().to('cpu').numpy()
-        
-        if gripper:
-            assert action.shape[-1] == 10 # xyz + rot6d + gripper
-        else:
-            assert action.shape[-1] == 9 # xyz + rot6d
+        if not use_all_joints:
+            if gripper:
+                assert action.shape[-1] == 10 # xyz + rot6d + gripper
+            else:
+                assert action.shape[-1] == 9 # xyz + rot6d
         del result
         del action
 
@@ -130,11 +130,13 @@ def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper,
             
             if step_action is None:  # no action in the buffer => no movement.
                 continue
-            
-            quat = rot6d_quat_transformer.forward(np.array(step_action[3:9]))
-            step_tcp = np.concatenate([step_action[:3], quat])
-            print("action", step_action[:3])
-            agent.set_tcp_pose(step_tcp)
+            if use_all_joints:
+                agent.set_joint_pose(np.array(step_action[:-1]))
+            else:
+                quat = rot6d_quat_transformer.forward(np.array(step_action[3:9]))
+                step_tcp = np.concatenate([step_action[:3], quat])
+                # print("action", step_action[:3])
+                agent.set_tcp_pose(step_tcp)
 
             # control gripper
             if gripper:
@@ -169,8 +171,12 @@ def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper,
 @click.option('--command_latency', '-cl', default=0.01, type=float, help="Latency between receiving SapceMouse command to executing on Robot in Sec.")
 @click.option('--gripper', '-g', is_flag=True, default=False, type=bool, help='Enable gripper control')
 @click.option('--continuous', '-c', is_flag=True, default=True, type=bool, help='Enable continuous testing mode')
+@click.option(
+    "--use_all_joints", type=bool, default=False,
+)
+@click.option('--dim', type=int, default=None, help='Override low-dim state/action size at eval time')
 def main(ckpt, output, match_dataset, match_episode,
-    vis_camera_idx, steps_per_inference, max_duration, frequency, command_latency, gripper, continuous):
+    vis_camera_idx, steps_per_inference, max_duration, frequency, command_latency, gripper, continuous, use_all_joints, dim):
     global interrupted
     
     # load checkpoint
@@ -211,6 +217,7 @@ def main(ckpt, output, match_dataset, match_episode,
     agent = Agent(
         obs_num=n_obs_steps,
         gripper=gripper,
+        use_all_joints=use_all_joints
     )
 
     if continuous:
@@ -227,7 +234,7 @@ def main(ckpt, output, match_dataset, match_episode,
                 episode_output = os.path.join(output, f"episode_{episode_count:03d}")
                 os.makedirs(episode_output, exist_ok=True)
             
-            success = run_single_episode(agent, policy, cfg, device, max_duration, gripper, episode_output)
+            success = run_single_episode(agent, policy, cfg, device, max_duration, gripper, episode_output, use_all_joints)
             
             if success:
                 cprint(f"Test No. {episode_count} finished", "green")
@@ -249,7 +256,7 @@ def main(ckpt, output, match_dataset, match_episode,
         episode_output = output
         if output is not None:
             os.makedirs(output, exist_ok=True)
-        run_single_episode(agent, policy, cfg, device, max_duration, gripper, episode_output)
+        run_single_episode(agent, policy, cfg, device, max_duration, gripper, episode_output, use_all_joints)
     agent.arm.home_robot()
     print("Goodbye.")
 

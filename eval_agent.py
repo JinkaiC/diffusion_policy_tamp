@@ -31,9 +31,10 @@ def transform_ee_pose_frame(ee_pose: np.ndarray, frame: str) -> np.ndarray:
 
 
 class Agent:
-    def __init__(self, obs_num, gripper, frame="base", **kwargs):
+    def __init__(self, obs_num, gripper, frame="base", use_all_joints=False, **kwargs):
         self.obs_num = obs_num  # Number of frames to buffer
         self.frame = frame
+        self.use_all_joints = use_all_joints
         
         # Initialize deques for buffering
         self.rgb_buffer = deque(maxlen=obs_num)
@@ -77,13 +78,17 @@ class Agent:
         # plt.axis("off")
         # plt.show()
         # Get robot state
-        arm_ee_pose = self.arm.get_tcp_position()
-        # 7-dim: x, y, z, qw, qx, qy, qz
-        transformed_ee_pose = transform_ee_pose_frame(arm_ee_pose, self.frame)
-        xyz, quat = transformed_ee_pose[:3], transformed_ee_pose[3:7]
-        rot6d = quat2rot6d_transformer.forward(np.array(quat))
-        # 9-dim: x, y, z, rot6d
-        pose = np.concatenate([xyz, rot6d])
+        if self.use_all_joints:
+            # import ipdb; ipdb.set_trace()
+            pose = self.arm.get_arm_position()[:-2]
+        else:
+            arm_ee_pose = self.arm.get_tcp_position()
+            # 7-dim: x, y, z, qw, qx, qy, qz
+            transformed_ee_pose = transform_ee_pose_frame(arm_ee_pose, self.frame)
+            xyz, quat = transformed_ee_pose[:3], transformed_ee_pose[3:7]
+            rot6d = quat2rot6d_transformer.forward(np.array(quat))
+            # 9-dim: x, y, z, rot6d
+            pose = np.concatenate([xyz, rot6d])
         # from ipdb import set_trace; set_trace()
         # if self.sim: #! Check SIm!!!!
             # pose = self.arm.get_tcp_position()
@@ -138,7 +143,10 @@ class Agent:
         self, pose, blocking=False
     ):
         self.arm.move_ee(pose)
-        
+    def set_joint_pose(
+        self, pose, blocking=False
+    ):
+        self.arm.move_joint(pose)
     def set_tcp_gripper(
         self, gripper, blocking=False
     ):
