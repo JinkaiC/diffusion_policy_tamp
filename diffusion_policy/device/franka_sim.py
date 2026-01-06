@@ -92,6 +92,7 @@ class FrankaGenesisEnvWrapper:
     
     def home_robot(self):
         rospy.set_param("/genesis/reset_robot", True)
+        self._gripper_state = self.gripper_init_state
     
     def get_gripper_position(self):
         return 1.0 if self._gripper_state == "close" else 0.0
