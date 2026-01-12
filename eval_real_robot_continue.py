@@ -95,7 +95,7 @@ def run_single_episode(agent: Agent, policy, cfg, device, max_duration, gripper,
         del result
         del action
 
-    ensemble_buffer = EnsembleBuffer(mode="new")
+    ensemble_buffer = EnsembleBuffer(mode="avg")
     with torch.inference_mode():
         print("Start!")
         raw_imgs = []

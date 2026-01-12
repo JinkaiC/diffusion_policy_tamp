@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from std_msgs.msg import Float64MultiArray, Bool
 import rospy
-    
+import time
 class FrankaGenesisEnvWrapper:
     def __init__(self, control_mode="joint", teleop=False, gripper="panda", gripper_init_state="open"):
         assert gripper in ["panda"] or gripper is None, f"Gripper {gripper} is not supported for FrankaGenesisWrapper."
@@ -133,6 +133,7 @@ class FrankaGenesisEnvWrapper:
                         self.open_gripper()
                     elif gripper_cmd and self._gripper_state == "open":
                         self.close_gripper()
+                        # time.sleep(3)
                 elif self.gripper == "ctek":
                     if not gripper_cmd and self._gripper_state == "close":
                         self.open_gripper()
